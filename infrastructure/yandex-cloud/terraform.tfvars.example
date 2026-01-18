@@ -1,0 +1,27 @@
+# Yandex Cloud Configuration
+# Copy this file to terraform.tfvars and fill in your values
+
+# YC Provider (get from: yc config list)
+yc_token     = "your-oauth-token"
+yc_cloud_id  = "your-cloud-id"
+yc_folder_id = "your-folder-id"
+yc_zone      = "ru-central1-a"
+
+# Project
+project_name = "mlservice"
+environment  = "dev"
+
+# Database
+db_username = "mlflow"
+db_password = "your-secure-password"
+db_resource_preset = "s2.micro"
+db_disk_size = 10
+
+# Serverless Containers
+api_memory_mb    = 512
+api_cores        = 1
+mlflow_memory_mb = 1024
+mlflow_cores     = 1
+
+# Storage
+artifact_retention_days = 90

@@ -1,0 +1,54 @@
+# Ansible Inventory for ML Service Deployment
+# Supports local, staging, and production environments
+
+all:
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    docker_compose_version: "2.24.0"
+    project_name: "ml-prediction-service"
+    project_dir: "/opt/ml-service"
+
+  children:
+    # Local development environment
+    local:
+      hosts:
+        localhost:
+          ansible_connection: local
+          env: development
+          docker_registry: ""
+          mlflow_port: 5000
+          api_port: 8000
+          locust_port: 8089
+
+    # Staging environment
+    staging:
+      hosts:
+        staging-server:
+          ansible_host: "{{ staging_host | default('staging.example.com') }}"
+          ansible_user: "{{ staging_user | default('deploy') }}"
+          ansible_ssh_private_key_file: "{{ staging_key | default('~/.ssh/staging_key') }}"
+          env: staging
+          docker_registry: "registry.staging.example.com"
+          mlflow_port: 5000
+          api_port: 8000
+          locust_port: 8089
+
+    # Production environment
+    production:
+      hosts:
+        prod-server-1:
+          ansible_host: "{{ prod_host_1 | default('prod1.example.com') }}"
+          ansible_user: "{{ prod_user | default('deploy') }}"
+          ansible_ssh_private_key_file: "{{ prod_key | default('~/.ssh/prod_key') }}"
+          env: production
+          docker_registry: "registry.example.com"
+          mlflow_port: 5000
+          api_port: 8000
+          enable_locust: false
+
+    # Docker hosts group
+    docker_hosts:
+      children:
+        local:
+        staging:
+        production:

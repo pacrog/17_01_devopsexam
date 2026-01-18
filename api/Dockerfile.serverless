@@ -1,0 +1,30 @@
+# ML Prediction Service - Serverless Container Version
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY app/ ./app/
+
+# Create directories
+RUN mkdir -p /tmp
+
+# Port 8080 for YC Serverless
+EXPOSE 8080
+
+# Environment variables for standalone mode (no MLflow)
+ENV MLFLOW_TRACKING_URI=""
+ENV STANDALONE_MODE="true"
+
+# Run on port 8080
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

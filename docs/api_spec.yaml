@@ -1,0 +1,384 @@
+openapi: 3.0.3
+info:
+  title: ML Prediction Service API
+  description: |
+    API-first designed service for ML predictions with health monitoring,
+    data drift detection, and model management capabilities.
+
+    ## Features
+    - Health checks and readiness probes
+    - ML model predictions (classification)
+    - Data drift monitoring via EvidentlyAI
+    - MLflow experiment tracking integration
+
+    ## Architecture
+    This service follows microservices principles:
+    - **API Service**: FastAPI-based REST API
+    - **MLflow Service**: Experiment tracking and model registry
+    - **PostgreSQL**: Metadata storage
+    - **MinIO/S3**: Artifact storage
+  version: 1.0.0
+  contact:
+    name: DevOps Exam Project
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+  - url: http://api:8000
+    description: Docker container
+
+tags:
+  - name: health
+    description: Health check endpoints
+  - name: predict
+    description: ML prediction endpoints
+  - name: data
+    description: Data management and drift detection
+  - name: mlflow
+    description: MLflow integration endpoints
+
+paths:
+  /healthcheck:
+    get:
+      tags:
+        - health
+      summary: Basic health check
+      description: Returns service health status
+      operationId: healthcheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: healthy
+                timestamp: "2025-01-17T10:00:00Z"
+                version: "1.0.0"
+
+  /readiness:
+    get:
+      tags:
+        - health
+      summary: Readiness probe
+      description: Checks if service is ready to accept requests (model loaded, DB connected)
+      operationId: readiness
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: Service not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /predict:
+    post:
+      tags:
+        - predict
+      summary: Make prediction
+      description: |
+        Submit features for ML model prediction.
+        Uses the currently deployed model from MLflow registry.
+      operationId: predict
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PredictionRequest'
+            example:
+              features:
+                sepal_length: 5.1
+                sepal_width: 3.5
+                petal_length: 1.4
+                petal_width: 0.2
+      responses:
+        '200':
+          description: Prediction successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PredictionResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Model not available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /predict/batch:
+    post:
+      tags:
+        - predict
+      summary: Batch predictions
+      description: Submit multiple samples for batch prediction
+      operationId: predictBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchPredictionRequest'
+      responses:
+        '200':
+          description: Batch prediction successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchPredictionResponse'
+
+  /data/drift:
+    post:
+      tags:
+        - data
+      summary: Analyze data drift
+      description: |
+        Analyzes data drift between reference and current datasets
+        using EvidentlyAI. Returns drift report with visualizations.
+      operationId: analyzeDrift
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DriftAnalysisRequest'
+      responses:
+        '200':
+          description: Drift analysis complete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriftAnalysisResponse'
+
+  /data/drift/report:
+    get:
+      tags:
+        - data
+      summary: Get drift report
+      description: Returns the latest drift analysis report in HTML format
+      operationId: getDriftReport
+      responses:
+        '200':
+          description: HTML drift report
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /mlflow/experiments:
+    get:
+      tags:
+        - mlflow
+      summary: List experiments
+      description: Returns list of MLflow experiments
+      operationId: listExperiments
+      responses:
+        '200':
+          description: List of experiments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExperimentsResponse'
+
+  /mlflow/models:
+    get:
+      tags:
+        - mlflow
+      summary: List registered models
+      description: Returns list of registered models in MLflow registry
+      operationId: listModels
+      responses:
+        '200':
+          description: List of models
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsResponse'
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+
+    ReadinessResponse:
+      type: object
+      required:
+        - ready
+        - checks
+      properties:
+        ready:
+          type: boolean
+        checks:
+          type: object
+          properties:
+            model_loaded:
+              type: boolean
+            database_connected:
+              type: boolean
+            mlflow_connected:
+              type: boolean
+
+    PredictionRequest:
+      type: object
+      required:
+        - features
+      properties:
+        features:
+          type: object
+          description: Feature values for prediction
+          additionalProperties:
+            type: number
+
+    PredictionResponse:
+      type: object
+      required:
+        - prediction
+        - probability
+      properties:
+        prediction:
+          oneOf:
+            - type: string
+            - type: integer
+          description: Predicted class
+        probability:
+          type: array
+          items:
+            type: number
+          description: Class probabilities
+        model_version:
+          type: string
+        latency_ms:
+          type: number
+
+    BatchPredictionRequest:
+      type: object
+      required:
+        - samples
+      properties:
+        samples:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              type: number
+
+    BatchPredictionResponse:
+      type: object
+      required:
+        - predictions
+      properties:
+        predictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PredictionResponse'
+        total_latency_ms:
+          type: number
+
+    DriftAnalysisRequest:
+      type: object
+      properties:
+        reference_data:
+          type: array
+          items:
+            type: object
+          description: Reference dataset (baseline)
+        current_data:
+          type: array
+          items:
+            type: object
+          description: Current dataset to compare
+
+    DriftAnalysisResponse:
+      type: object
+      required:
+        - drift_detected
+        - drift_score
+      properties:
+        drift_detected:
+          type: boolean
+        drift_score:
+          type: number
+          minimum: 0
+          maximum: 1
+        feature_drift:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              drift_detected:
+                type: boolean
+              drift_score:
+                type: number
+        report_url:
+          type: string
+          format: uri
+
+    ExperimentsResponse:
+      type: object
+      properties:
+        experiments:
+          type: array
+          items:
+            type: object
+            properties:
+              experiment_id:
+                type: string
+              name:
+                type: string
+              artifact_location:
+                type: string
+
+    ModelsResponse:
+      type: object
+      properties:
+        models:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              latest_version:
+                type: string
+              description:
+                type: string
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object

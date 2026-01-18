@@ -1,0 +1,248 @@
+# Ansible Playbook for ML Prediction Service Deployment
+# Automates: Docker installation, service deployment, health checks
+#
+# Usage:
+#   ansible-playbook -i inventory.yml playbook.yml --limit local
+#   ansible-playbook -i inventory.yml playbook.yml --limit staging
+#   ansible-playbook -i inventory.yml playbook.yml --limit production --tags deploy
+
+---
+- name: Deploy ML Prediction Service
+  hosts: docker_hosts
+  become: yes
+  vars:
+    docker_compose_file: "{{ project_dir }}/docker-compose.yml"
+    health_check_url: "http://localhost:{{ api_port }}/healthcheck"
+    max_health_retries: 30
+    health_retry_delay: 10
+
+  tasks:
+    # =========================================
+    # Prerequisites
+    # =========================================
+    - name: Ensure required packages are installed
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - python3-pip
+          - git
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+      tags: [prerequisites]
+
+    - name: Install Docker SDK for Python
+      pip:
+        name:
+          - docker
+          - docker-compose
+        state: present
+      tags: [prerequisites]
+
+    # =========================================
+    # Docker Installation
+    # =========================================
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+      when: ansible_os_family == "Debian"
+      tags: [docker]
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+      when: ansible_os_family == "Debian"
+      tags: [docker]
+
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+      tags: [docker]
+
+    - name: Ensure Docker service is running
+      service:
+        name: docker
+        state: started
+        enabled: yes
+      tags: [docker]
+
+    - name: Add user to docker group
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+      when: ansible_user != "root"
+      tags: [docker]
+
+    # =========================================
+    # Project Setup
+    # =========================================
+    - name: Create project directory
+      file:
+        path: "{{ project_dir }}"
+        state: directory
+        mode: '0755'
+      tags: [setup]
+
+    - name: Copy project files
+      synchronize:
+        src: "{{ playbook_dir }}/../../"
+        dest: "{{ project_dir }}/"
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=.venv"
+          - "--exclude=__pycache__"
+          - "--exclude=*.pyc"
+          - "--exclude=.env"
+      delegate_to: "{{ inventory_hostname }}"
+      when: env != "development"
+      tags: [setup, deploy]
+
+    - name: Copy environment file
+      template:
+        src: templates/env.j2
+        dest: "{{ project_dir }}/.env"
+        mode: '0600'
+      tags: [setup, config]
+
+    # =========================================
+    # Service Deployment
+    # =========================================
+    - name: Pull Docker images
+      community.docker.docker_compose:
+        project_src: "{{ project_dir }}"
+        pull: yes
+        state: present
+      register: docker_pull
+      tags: [deploy]
+
+    - name: Build and start services
+      community.docker.docker_compose:
+        project_src: "{{ project_dir }}"
+        build: yes
+        state: present
+        restarted: yes
+      register: docker_start
+      tags: [deploy]
+
+    - name: Display container status
+      debug:
+        var: docker_start.services
+      tags: [deploy]
+
+    # =========================================
+    # Health Checks
+    # =========================================
+    - name: Wait for API service to be healthy
+      uri:
+        url: "{{ health_check_url }}"
+        method: GET
+        status_code: 200
+      register: health_result
+      until: health_result.status == 200
+      retries: "{{ max_health_retries }}"
+      delay: "{{ health_retry_delay }}"
+      tags: [deploy, health]
+
+    - name: Display health check result
+      debug:
+        msg: "Service is healthy: {{ health_result.json }}"
+      tags: [deploy, health]
+
+    - name: Check MLflow availability
+      uri:
+        url: "http://localhost:{{ mlflow_port }}/health"
+        method: GET
+        status_code: 200
+      register: mlflow_health
+      until: mlflow_health.status == 200
+      retries: 10
+      delay: 5
+      tags: [deploy, health]
+
+    # =========================================
+    # Logging and Monitoring
+    # =========================================
+    - name: Get container logs
+      command: docker-compose -f {{ docker_compose_file }} logs --tail=50
+      register: container_logs
+      changed_when: false
+      tags: [logs]
+
+    - name: Display container logs
+      debug:
+        var: container_logs.stdout_lines
+      tags: [logs]
+
+    # =========================================
+    # Cleanup Tasks
+    # =========================================
+    - name: Remove unused Docker images
+      command: docker image prune -f
+      changed_when: false
+      tags: [cleanup]
+
+    - name: Remove unused Docker volumes
+      command: docker volume prune -f
+      changed_when: false
+      when: env == "development"
+      tags: [cleanup]
+
+# =========================================
+# Load Testing Playbook
+# =========================================
+- name: Run Load Tests
+  hosts: docker_hosts
+  become: yes
+  vars:
+    locust_users: 10
+    locust_spawn_rate: 1
+    locust_run_time: "60s"
+
+  tasks:
+    - name: Start Locust with testing profile
+      command: >
+        docker-compose -f {{ project_dir }}/docker-compose.yml
+        --profile testing up -d locust
+      tags: [loadtest]
+
+    - name: Display Locust URL
+      debug:
+        msg: "Locust UI available at http://{{ ansible_host }}:{{ locust_port }}"
+      tags: [loadtest]
+
+    - name: Run headless load test
+      command: >
+        docker-compose -f {{ project_dir }}/docker-compose.yml
+        run --rm locust
+        -f /mnt/locust/locustfile.py
+        --host http://api:8000
+        --users {{ locust_users }}
+        --spawn-rate {{ locust_spawn_rate }}
+        --run-time {{ locust_run_time }}
+        --headless
+        --html /mnt/locust/report.html
+      register: loadtest_result
+      when: run_headless_test | default(false) | bool
+      tags: [loadtest, headless]
+
+    - name: Fetch load test report
+      fetch:
+        src: "{{ project_dir }}/tests/report.html"
+        dest: "./reports/loadtest_{{ inventory_hostname }}_{{ ansible_date_time.iso8601_basic_short }}.html"
+        flat: yes
+      when: run_headless_test | default(false) | bool
+      tags: [loadtest, report]
